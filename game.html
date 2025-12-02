@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Shooting Adventure Game</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: #111;
+      color: #f5f5f5;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    #game-wrapper {
+      position: relative;
+    }
+
+    canvas {
+      background: radial-gradient(circle at top, #1b2735, #090a0f);
+      border-radius: 12px;
+      box-shadow: 0 0 30px rgba(0,0,0,0.8);
+      border: 2px solid #444;
+      display: block;
+    }
+
+    #ui {
+      position: absolute;
+      top: 8px;
+      left: 10px;
+      right: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 14px;
+      text-shadow: 0 0 4px #000;
+      pointer-events: none;
+    }
+
+    #hp-bar {
+      display: flex;
+      gap: 4px;
+    }
+
+    .heart {
+      width: 14px;
+      height: 14px;
+      background: #ff4b5c;
+      clip-path: polygon(50% 90%, 0 40%, 20% 0, 50% 30%, 80% 0, 100% 40%);
+      filter: drop-shadow(0 0 3px rgba(255,75,92,0.7));
+    }
+
+    #info-text {
+      position: absolute;
+      bottom: 10px;
+      left: 0;
+      right: 0;
+      text-align: center;
+      font-size: 13px;
+      opacity: 0.85;
+      pointer-events: none;
+    }
+
+    #overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.72);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      text-align: center;
+      padding: 20px;
+      border-radius: 12px;
+      color: #fdfdfd;
+      font-size: 16px;
+    }
+
+    #overlay h1 {
+      margin-bottom: 10px;
+      font-size: 26px;
+    }
+
+    #overlay p {
+      font-size: 14px;
+      margin: 6px 0;
+    }
+
+    #overlay .key {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid #999;
+      font-size: 12px;
+      margin: 0 2px;
+    }
+
+    #overlay small {
+      font-size: 12px;
+      opacity: 0.8;
+      margin-top: 10px;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-wrapper">
+    <canvas id="game" width="900" height="550"></canvas>
+    <div id="ui">
+      <div id="hp-bar"></div>
+      <div id="score-level">Score: 0 | Level: 1</div>
+    </div>
+    <div id="info-text">
+      Move: W/A/S/D · Aim: Arrow keys · Shoot: Space
+    </div>
+    <div id="overlay">
+      <h1>Adventure Shooter</h1>
+      <p>Top-down shooting &amp; adventure game in pure HTML, CSS &amp; JavaScript.</p>
+      <p>
+        Move with <span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span><br>
+        Aim with <span class="key">↑</span> <span class="key">↓</span> <span class="key">←</span> <span class="key">→</span><br>
+        Shoot with <span class="key">Space</span>
+      </p>
+      <p>Defeat all enemies to unlock the glowing gate, then reach it to go to the next level.</p>
+      <small>Press any key to begin</small>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const overlay = document.getElementById("overlay");
+    const hpBar = document.getElementById("hp-bar");
+    const scoreLevel = document.getElementById("score-level");
+
+    const WIDTH = canvas.width;
+    const HEIGHT = canvas.height;
+
+    // --- Game State ---
+    let keys = {};
+    let lastTime = 0;
+    let player, bullets, enemies, obstacles, gate;
+    let score = 0;
+    let level = 1;
+    let gameRunning = false;
+    let gameOver = false;
+
+    // --- Player ---
+    function createPlayer() {
+      return {
+        x: WIDTH / 2,
+        y: HEIGHT / 2 + 80,
+        radius: 16,
+        speed: 220, // pixels per second
+        hp: 3,
+        maxHp: 3,
+        aimX: 0,
+        aimY: -1,
+        shootCooldown: 0
+      };
+    }
+
+    // --- Obstacles layout per level ---
+    function createObstacles(level) {
+      const base = [
+        { x: 160, y: 160, w: 120, h: 20 },
+        { x: 540, y: 140, w: 200, h: 20 },
+        { x: 260, y: 320, w: 140, h: 20 },
+        { x: 480, y: 360, w: 220, h: 20 }
+      ];
+      // Slightly change obstacles with level for "adventure"
+      if (level >= 2) {
+        base.push({ x: 380, y: 230, w: 30, h: 120 });
+      }
+      if (level >= 3) {
+        base.push({ x: 80, y: 260, w: 80, h: 20 });
+        base.push({ x: 720, y: 260, w: 80, h: 20 });
+      }
+      return base;
+    }
+
+    // --- Enemies ---
+    function createEnemies(level) {
+      const enemies = [];
+      const count = 4 + level * 2;
+      for (let i = 0; i < count; i++) {
+        const side = Math.random() < 0.5 ? "left" : "right";
+        const x = side === "left" ? 60 + Math.random() * 120 : WIDTH - 60 - Math.random() * 120;
+        const y = 60 + Math.random() * (HEIGHT - 160);
+        enemies.push({
+          x,
+          y,
+          radius: 12,
+          speed: 70 + Math.random() * 40 + level * 10,
+          hp: 1 + Math.floor(level / 3),
+          hitFlash: 0
+        });
+      }
+      return enemies;
+    }
+
+    // --- Gate / Exit ---
+    function createGate(level) {
+      return {
+        x: WIDTH / 2 - 25,
+        y: 40,
+        w: 50,
+        h: 20,
+        unlocked: false,
+        pulse: 0
+      };
+    }
+
+    // --- Utility ---
+    function lineRectCollision(x1, y1, x2, y2, rx, ry, rw, rh) {
+      // Check if line intersects rectangle (simple approach: sample points can work for small bullets)
+      // But here we'll approximate bullet as circle, and just check end point against rect.
+      return (x2 >= rx && x2 <= rx + rw && y2 >= ry && y2 <= ry + rh);
+    }
+
+    function circleRectCollision(cx, cy, cr, rx, ry, rw, rh) {
+      const closestX = Math.max(rx, Math.min(cx, rx + rw));
+      const closestY = Math.max(ry, Math.min(cy, ry + rh));
+      const dx = cx - closestX;
+      const dy = cy - closestY;
+      return (dx * dx + dy * dy) < (cr * cr);
+    }
+
+    function dist2(ax, ay, bx, by) {
+      const dx = ax - bx;
+      const dy = ay - by;
+      return dx * dx + dy * dy;
+    }
+
+    function sign(x) {
+      return x >= 0 ? 1 : -1;
+    }
+
+    // --- Input ---
+    window.addEventListener("keydown", (e) => {
+      keys[e.code] = true;
+      if (!gameRunning && !gameOver) {
+        startGame();
+      } else if (gameOver && e.code === "Space") {
+        resetGame();
+      }
+    });
+
+    window.addEventListener("keyup", (e) => {
+      keys[e.code] = false;
+    });
+
+    // --- Game Init / Reset ---
+    function initLevel() {
+      player = createPlayer();
+      bullets = [];
+      obstacles = createObstacles(level);
+      enemies = createEnemies(level);
+      gate = createGate(level);
+      updateHPBar();
+      updateScoreLevel();
+    }
+
+    function startGame() {
+      overlay.style.display = "none";
+      gameRunning = true;
+      lastTime = performance.now();
+      requestAnimationFrame(gameLoop);
+    }
+
+    function resetGame() {
+      score = 0;
+      level = 1;
+      gameOver = false;
+      overlay.innerHTML = `
+        <h1>Adventure Shooter</h1>
+        <p>Top-down shooting &amp; adventure game in pure HTML, CSS &amp; JavaScript.</p>
+        <p>
+          Move with <span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span><br>
+          Aim with <span class="key">↑</span> <span class="key">↓</span> <span class="key">←</span> <span class="key">→</span><br>
+          Shoot with <span class="key">Space</span>
+        </p>
+        <p>Defeat all enemies to unlock the glowing gate, then reach it to go to the next level.</p>
+        <small>Press any key to begin</small>
+      `;
+      initLevel();
+      overlay.style.display = "flex";
+      gameRunning = false;
+    }
+
+    // --- HUD ---
+    function updateHPBar() {
+      hpBar.innerHTML = "";
+      for (let i = 0; i < player.maxHp; i++) {
+        const div = document.createElement("div");
+        div.className = "heart";
+        if (i >= player.hp) {
+          div.style.filter = "grayscale(0.8) opacity(0.25)";
+        }
+        hpBar.appendChild(div);
+      }
+    }
+
+    function updateScoreLevel() {
+      scoreLevel.textContent = `Score: ${score} | Level: ${level}`;
+    }
+
+    // --- Main Loop ---
+    function gameLoop(timestamp) {
+      if (!gameRunning) return;
+      const dt = (timestamp - lastTime) / 1000; // seconds
+      lastTime = timestamp;
+
+      update(dt);
+      draw();
+
+      if (gameRunning) {
+        requestAnimationFrame(gameLoop);
+      }
+    }
+
+    // --- Update ---
+    function update(dt) {
+      handleInput(dt);
+      updateBullets(dt);
+      updateEnemies(dt);
+      updateGate(dt);
+      checkLevelComplete();
+    }
+
+    function handleInput(dt) {
+      // Movement
+      let moveX = 0, moveY = 0;
+      if (keys["KeyW"]) moveY -= 1;
+      if (keys["KeyS"]) moveY += 1;
+      if (keys["KeyA"]) moveX -= 1;
+      if (keys["KeyD"]) moveX += 1;
+
+      let len = Math.hypot(moveX, moveY);
+      if (len > 0) {
+        moveX /= len;
+        moveY /= len;
+      }
+
+      let newX = player.x + moveX * player.speed * dt;
+      let newY = player.y + moveY * player.speed * dt;
+
+      // Keep inside bounds
+      const r = player.radius;
+      newX = Math.max(r + 10, Math.min(WIDTH - r - 10, newX));
+      newY = Math.max(r + 40, Math.min(HEIGHT - r - 10, newY));
+
+      // Collision with obstacles
+      thisPos = { x: player.x, y: player.y };
+      let candidateX = newX;
+      let candidateY = newY;
+
+      // Separate axis resolution
+      // X axis
+      for (const ob of obstacles) {
+        if (circleRectCollision(candidateX, player.y, r, ob.x, ob.y, ob.w, ob.h)) {
+          candidateX = player.x; // cancel x movement
+        }
+      }
+      // Y axis
+      for (const ob of obstacles) {
+        if (circleRectCollision(candidateX, candidateY, r, ob.x, ob.y, ob.w, ob.h)) {
+          candidateY = player.y; // cancel y movement
+        }
+      }
+
+      player.x = candidateX;
+      player.y = candidateY;
+
+      // Aim with arrow keys
+      let aimX = 0, aimY = 0;
+      if (keys["ArrowUp"]) aimY -= 1;
+      if (keys["ArrowDown"]) aimY += 1;
+      if (keys["ArrowLeft"]) aimX -= 1;
+      if (keys["ArrowRight"]) aimX += 1;
+
+      if (aimX !== 0 || aimY !== 0) {
+        const alen = Math.hypot(aimX, aimY);
+        player.aimX = aimX / alen;
+        player.aimY = aimY / alen;
+      }
+
+      // Shooting
+      player.shootCooldown -= dt;
+      if (player.shootCooldown < 0) player.shootCooldown = 0;
+
+      if (keys["Space"] && player.shootCooldown === 0) {
+        shootBullet();
+        player.shootCooldown = 0.28; // seconds between shots
+      }
+    }
+
+    function shootBullet() {
+      if (player.aimX === 0 && player.aimY === 0) return;
+      bullets.push({
+        x: player.x + player.aimX * (player.radius + 4),
+        y: player.y + player.aimY * (player.radius + 4),
+        radius: 4,
+        speed: 420,
+        dx: player.aimX,
+        dy: player.aimY,
+        life: 1.6 // seconds
+      });
+    }
+
+    function updateBullets(dt) {
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        const b = bullets[i];
+        b.x += b.dx * b.speed * dt;
+        b.y += b.dy * b.speed * dt;
+        b.life -= dt;
+
+        // Out of bounds or life ended
+        if (
+          b.life <= 0 ||
+          b.x < -10 ||
+          b.x > WIDTH + 10 ||
+          b.y < 0 ||
+          b.y > HEIGHT + 10
+        ) {
+          bullets.splice(i, 1);
+          continue;
+        }
+
+        // Collision with obstacles stops bullet
+        let hitObstacle = false;
+        for (const ob of obstacles) {
+          if (lineRectCollision(
+            b.x - b.dx * 5, b.y - b.dy * 5,
+            b.x, b.y,
+            ob.x, ob.y, ob.w, ob.h
+          )) {
+            hitObstacle = true;
+            break;
+          }
+        }
+        if (hitObstacle) {
+          bullets.splice(i, 1);
+          continue;
+        }
+
+        // Collision with enemies
+        for (let j = enemies.length - 1; j >= 0; j--) {
+          const e = enemies[j];
+          const d2 = dist2(b.x, b.y, e.x, e.y);
+          const rr = (b.radius + e.radius) * (b.radius + e.radius);
+          if (d2 < rr) {
+            e.hp -= 1;
+            e.hitFlash = 0.15;
+            bullets.splice(i, 1);
+            if (e.hp <= 0) {
+              // Enemy defeated
+              enemies.splice(j, 1);
+              score += 10;
+              updateScoreLevel();
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    function updateEnemies(dt) {
+      for (const e of enemies) {
+        // Chase player but avoid obstacles roughly
+        const dx = player.x - e.x;
+        const dy = player.y - e.y;
+        const len = Math.hypot(dx, dy) || 1;
+        let vx = (dx / len) * e.speed * dt;
+        let vy = (dy / len) * e.speed * dt;
+
+        let newX = e.x + vx;
+        let newY = e.y + vy;
+
+        // Simple obstacle avoidance
+        for (const ob of obstacles) {
+          if (circleRectCollision(newX, newY, e.radius, ob.x, ob.y, ob.w, ob.h)) {
+            // Try sliding along one axis
+            if (!circleRectCollision(e.x + vx, e.y, e.radius, ob.x, ob.y, ob.w, ob.h)) {
+              newX = e.x + vx;
+              newY = e.y;
+            } else if (!circleRectCollision(e.x, e.y + vy, e.radius, ob.x, ob.y, ob.w, ob.h)) {
+              newX = e.x;
+              newY = e.y + vy;
+            } else {
+              newX = e.x;
+              newY = e.y;
+            }
+          }
+        }
+
+        e.x = newX;
+        e.y = newY;
+
+        if (e.hitFlash > 0) {
+          e.hitFlash -= dt;
+        }
+
+        // Damage player on touch
+        const d2 = dist2(e.x, e.y, player.x, player.y);
+        const rr = (e.radius + player.radius) * (e.radius + player.radius);
+        if (d2 < rr) {
+          damagePlayer();
+        }
+      }
+    }
+
+    function damagePlayer() {
+      // Push enemies away slightly & damage once per overlap cycle
+      if (!player.damageCooldown || player.damageCooldown <= 0) {
+        player.hp -= 1;
+        updateHPBar();
+        player.damageCooldown = 1.0; // seconds of invulnerability
+        if (player.hp <= 0) {
+          triggerGameOver();
+        }
+      }
+      if (player.damageCooldown > 0) {
+        // nothing else, handled in updateGate (timers)
+      }
+    }
+
+    function updateGate(dt) {
+      gate.pulse += dt * 3;
+      if (player.damageCooldown && player.damageCooldown > 0) {
+        player.damageCooldown -= dt;
+        if (player.damageCooldown < 0) player.damageCooldown = 0;
+      }
+    }
+
+    function checkLevelComplete() {
+      if (!gate.unlocked && enemies.length === 0) {
+        gate.unlocked = true;
+      }
+
+      if (gate.unlocked) {
+        // Check if player inside gate area
+        if (
+          player.x > gate.x &&
+          player.x < gate.x + gate.w &&
+          player.y - player.radius < gate.y + gate.h &&
+          player.y + player.radius > gate.y
+        ) {
+          // Next level
+          level += 1;
+          updateScoreLevel();
+          initLevel();
+        }
+      }
+    }
+
+    function triggerGameOver() {
+      gameOver = true;
+      gameRunning = false;
+      overlay.style.display = "flex";
+      overlay.innerHTML = `
+        <h1>Game Over</h1>
+        <p>Your score: <strong>${score}</strong> | Reached level: <strong>${level}</strong></p>
+        <p>Press <span class="key">Space</span> to restart</p>
+      `;
+    }
+
+    // --- Draw ---
+    function drawBackground() {
+      // Subtle grid / floor feeling
+      ctx.save();
+      ctx.strokeStyle = "rgba(255,255,255,0.03)";
+      ctx.lineWidth = 1;
+      const cell = 40;
+      for (let x = 0; x <= WIDTH; x += cell) {
+        ctx.beginPath();
+        ctx.moveTo(x, 40);
+        ctx.lineTo(x, HEIGHT);
+        ctx.stroke();
+      }
+      for (let y = 40; y <= HEIGHT; y += cell) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(WIDTH, y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawObstacles() {
+      ctx.save();
+      for (const ob of obstacles) {
+        const gradient = ctx.createLinearGradient(ob.x, ob.y, ob.x, ob.y + ob.h);
+        gradient.addColorStop(0, "rgba(60,60,80,0.95)");
+        gradient.addColorStop(1, "rgba(25,25,40,0.95)");
+        ctx.fillStyle = gradient;
+        ctx.strokeStyle = "rgba(0,0,0,0.7)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(ob.x, ob.y, ob.w, ob.h, 6);
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawGate() {
+      ctx.save();
+      const glow = gate.unlocked ? 1 : 0.3;
+      const pulse = (Math.sin(gate.pulse) + 1) * 0.5;
+      const alpha = 0.4 + pulse * 0.3 * glow;
+
+      ctx.shadowBlur = gate.unlocked ? 20 : 8;
+      ctx.shadowColor = gate.unlocked ? "rgba(0,255,180,0.9)" : "rgba(150,150,150,0.5)";
+
+      const gradient = ctx.createLinearGradient(gate.x, gate.y, gate.x, gate.y + gate.h);
+      if (gate.unlocked) {
+        gradient.addColorStop(0, `rgba(0,255,180,${0.7 + 0.2*pulse})`);
+        gradient.addColorStop(1, `rgba(0,200,140,${0.7})`);
+      } else {
+        gradient.addColorStop(0, "rgba(160,160,160,0.7)");
+        gradient.addColorStop(1, "rgba(90,90,90,0.9)");
+      }
+
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.roundRect(gate.x, gate.y, gate.w, gate.h, 8);
+      ctx.fill();
+
+      ctx.shadowBlur = 0;
+
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      ctx.roundRect(gate.x - 6, gate.y - 4, gate.w + 12, gate.h + 8, 12);
+      ctx.strokeStyle = gate.unlocked ? "rgba(0,255,200,0.9)" : "rgba(200,200,200,0.4)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      // Label
+      ctx.fillStyle = gate.unlocked ? "rgba(200,255,255,0.9)" : "rgba(220,220,220,0.5)";
+      ctx.font = "12px system-ui";
+      ctx.textAlign = "center";
+      ctx.fillText(gate.unlocked ? "EXIT" : "LOCKED", gate.x + gate.w / 2, gate.y - 6);
+
+      ctx.restore();
+    }
+
+    function drawPlayer() {
+      ctx.save();
+
+      // Glowing circle
+      ctx.shadowBlur = 15;
+      ctx.shadowColor = "rgba(0,200,255,0.8)";
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+      const grad = ctx.createRadialGradient(player.x, player.y, 4, player.x, player.y, player.radius);
+      grad.addColorStop(0, "#00e5ff");
+      grad.addColorStop(1, "#0077ff");
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      // Aim direction indicator
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = "rgba(255,255,255,0.8)";
+      ctx.lineWidth = 2;
+      const aimLen = 24;
+      ctx.beginPath();
+      ctx.moveTo(player.x, player.y);
+      ctx.lineTo(
+        player.x + player.aimX * aimLen,
+        player.y + player.aimY * aimLen
+      );
+      ctx.stroke();
+
+      ctx.restore();
+
+      // Damage flicker overlay
+      if (player.damageCooldown && player.damageCooldown > 0) {
+        const t = player.damageCooldown;
+        const alpha = 0.6 * (t % 0.2 > 0.1 ? 1 : 0.2);
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = "rgba(255,40,40,0.9)";
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, player.radius + 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    function drawBullets() {
+      ctx.save();
+      for (const b of bullets) {
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = "rgba(0,255,255,0.9)";
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+        ctx.fillStyle = "#00ffff";
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    function drawEnemies() {
+      ctx.save();
+      for (const e of enemies) {
+        const healthRatio = Math.max(0, e.hp) / (1 + Math.floor(level / 3));
+        const baseColor = healthRatio > 0.5 ? "#ffb300" : "#ff5252";
+
+        ctx.shadowBlur = 14;
+        ctx.shadowColor = e.hitFlash > 0 ? "rgba(255,255,255,0.9)" : "rgba(255,100,60,0.9)";
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, e.radius, 0, Math.PI * 2);
+        ctx.fillStyle = baseColor;
+        ctx.fill();
+
+        // HP bar
+        const barW = 18;
+        const barH = 3;
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.fillRect(e.x - barW/2, e.y - e.radius - 8, barW, barH);
+        ctx.fillStyle = "#00ff7f";
+        ctx.fillRect(e.x - barW/2, e.y - e.radius - 8, barW * healthRatio, barH);
+      }
+      ctx.restore();
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, WIDTH, HEIGHT);
+
+      drawBackground();
+      drawObstacles();
+      drawGate();
+      drawBullets();
+      drawEnemies();
+      drawPlayer();
+    }
+
+    // --- Start ---
+    initLevel();
+    draw();
+  </script>
+</body>
+</html>
